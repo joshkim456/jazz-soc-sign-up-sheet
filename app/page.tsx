@@ -11,13 +11,13 @@ const Icon = ({ d }: { d: string }) => (
     <path d={d} />
   </svg>
 );
-const PLUS = "M12 5v14M5 12h14";
-const MINUS = "M5 12h14";
-const UNDO = "M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3";
-const MORE = "M5 12h.01M12 12h.01M19 12h.01";
-const SKIP = "M5 5l9 7-9 7zM19 5v14";
+const PLUS = "M12 4v16M4 12h16";
+const MINUS = "M4 12h16";
+const UNDO = "M9 14 4 9l5-5M4 9h11a5 5 0 0 1 5 5v6";
+const MORE = "M4 7h16M4 12h16M4 17h16";
+const ARROW = "M3 12h17M14 6l6 6-6 6";
 
-type Sheet = { kind: "add" } | { kind: "player"; id: string } | { kind: "menu" } | null;
+type Sheet = { kind: "add"; inst?: Inst } | { kind: "player"; id: string } | { kind: "menu" } | null;
 
 export default function Page() {
   const [state, setState] = useState<State | null>(null);
@@ -119,7 +119,9 @@ export default function Page() {
             autoFocus
             onInput={() => setBadPin(false)}
           />
-          <button className="btn primary">Enter</button>
+          <button className="btn solid">
+            Enter <Icon d={ARROW} />
+          </button>
         </form>
       </main>
     );
@@ -131,81 +133,130 @@ export default function Page() {
   const selected = sheet?.kind === "player" ? players.find((p) => p.id === sheet.id) : undefined;
   const close = () => setSheet(null);
 
+  // What one more tap of "Next tune" would do: who comes on, who goes off.
+  const after = new Map(apply(state, { type: "next" }).players.map((p) => [p.id, p.slot]));
+  const comingOn = (p: Player) => !p.slot && Boolean(after.get(p.id));
+  const goingOff = (p: Player) => Boolean(p.slot) && !after.get(p.id);
+
+  // Each line of the sheet: the player on stage, then that line's share of the queue.
+  // The two horn lines deal the horn queue out between them, so each column reads as the next pair.
+  const lines = SLOTS.map((slot) => {
+    const queue = queueFor(players, slot.inst);
+    const share =
+      slot.inst === "horn" ? queue.filter((_, i) => i % 2 === (slot.id === "horn1" ? 0 : 1)) : queue;
+    return { slot, on: players.find((p) => p.slot === slot.id), share };
+  });
+  const places = Math.max(3, ...lines.map((l) => l.share.length + 1));
+  const at = (l: number, p: number) => ({ "--l": l, "--p": p }) as React.CSSProperties;
+
   return (
     <main className="app">
-      <header className="top">
+      <header className="mast">
         <h1 className="tune">
-          Tune <b>{state.tune}</b>
+          <span className="caps">Tune</span>
+          <b>{state.tune}</b>
         </h1>
-        {(offline || !persistent) && (
-          <span className="offline" role="status" aria-label={offline ? "Offline" : "No database"} />
-        )}
-        <button className="icon" aria-label="Undo" disabled={!state.prev} onClick={() => act({ type: "undo" })}>
-          <Icon d={UNDO} />
-        </button>
-        <button className="icon" aria-label="Menu" onClick={() => setSheet({ kind: "menu" })}>
-          <Icon d={MORE} />
-        </button>
+        <div className="tools">
+          {(offline || !persistent) && (
+            <span className="caps" role="status">
+              {offline ? "Offline" : "No sync"}
+            </span>
+          )}
+          <button className="tool" aria-label="Undo" disabled={!state.prev} onClick={() => act({ type: "undo" })}>
+            <Icon d={UNDO} />
+          </button>
+          <button className="tool" aria-label="Menu" onClick={() => setSheet({ kind: "menu" })}>
+            <Icon d={MORE} />
+          </button>
+        </div>
       </header>
 
-      <section className="table">
-        <div className="head" style={{ paddingLeft: 0 }} />
-        <div className="head">On</div>
-        <div className="head">Next</div>
-        {SLOTS.map((slot) => {
-          const p = players.find((x) => x.slot === slot.id);
-          const waiting = queueFor(players, slot.inst);
-          const second = slot.id === "horn2";
-          return (
-            <Row key={slot.id}>
-              <div className={`label ${second ? "joined" : ""}`}>{slot.label}</div>
-              <div className={`stage ${second ? "joined" : ""}`}>
-                {p ? (
+      <div className="scroll">
+        <section className="grid" style={{ "--n": places } as React.CSSProperties}>
+          <div className="c corner hd" style={at(0, -1)} />
+          <div className="c hd stage caps" style={at(0, 0)}>
+            On
+          </div>
+          {Array.from({ length: places }, (_, i) => (
+            <div key={i} className="c hd caps" style={at(0, i + 1)}>
+              {i === 0 ? "Next" : `+${i + 1}`}
+            </div>
+          ))}
+
+          {lines.map(({ slot, on, share }, i) => {
+            const last = i === lines.length - 1 ? "last" : "";
+            const l = i + 1;
+            return (
+              <Line key={slot.id}>
+                <div className={`c lab caps ${last}`} style={at(l, -1)}>
+                  {slot.label}
+                </div>
+                {on ? (
                   <button
-                    className={`on ${p.tunes >= limit - 1 && waiting.length ? "last" : ""}`}
-                    onClick={() => setSheet({ kind: "player", id: p.id })}
+                    className={`c stage on ${last}`}
+                    style={at(l, 0)}
+                    onClick={() => setSheet({ kind: "player", id: on.id })}
                   >
-                    <span>{p.name}</span>
-                    <span className="pips" aria-label={`${p.tunes} of ${limit}`}>
-                      {Array.from({ length: Math.max(limit, p.tunes) }, (_, i) => (
-                        <i key={i} className={i < p.tunes ? "done" : ""} />
-                      ))}
-                    </span>
+                    <span>{on.name}</span>
+                    {goingOff(on) ? (
+                      <span className="out">Out</span>
+                    ) : (
+                      <span className="tally" aria-label={`${on.tunes} of ${limit}`}>
+                        {Array.from({ length: Math.max(limit, on.tunes) }, (_, t) => (
+                          <i key={t} className={t < on.tunes ? "done" : ""} />
+                        ))}
+                      </span>
+                    )}
                   </button>
                 ) : (
-                  <div
-                    className={`empty ${slot.required ? "required" : ""}`}
-                    aria-label={slot.required ? "Needed" : "Empty"}
+                  <button
+                    className={`c stage ${slot.required ? "gap" : ""} ${last}`}
+                    style={at(l, 0)}
+                    aria-label={`Add ${slot.label}`}
+                    onClick={() => setSheet({ kind: "add", inst: slot.inst })}
                   />
                 )}
-              </div>
-              {!second && (
-                <div className="next" style={slot.id === "horn1" ? { gridRow: "span 2" } : undefined}>
-                  {waiting.map((w) => (
-                    <button key={w.id} className="wait" onClick={() => setSheet({ kind: "player", id: w.id })}>
-                      {w.name}
+                {Array.from({ length: places }, (_, j) => {
+                  const p = share[j];
+                  return p ? (
+                    <button
+                      key={p.id}
+                      className={`c q ${comingOn(p) ? "in" : ""} ${last}`}
+                      style={at(l, j + 1)}
+                      onClick={() => setSheet({ kind: "player", id: p.id })}
+                    >
+                      <span>{p.name}</span>
                     </button>
-                  ))}
-                </div>
-              )}
-            </Row>
-          );
-        })}
-      </section>
+                  ) : (
+                    <button
+                      key={j}
+                      className={`c q ${last}`}
+                      style={at(l, j + 1)}
+                      aria-label={`Add ${slot.label}`}
+                      onClick={() => setSheet({ kind: "add", inst: slot.inst })}
+                    />
+                  );
+                })}
+              </Line>
+            );
+          })}
+        </section>
+      </div>
 
       <nav className="bar">
         <div>
-          <button className="fab" aria-label="Add player" onClick={() => setSheet({ kind: "add" })}>
+          <button className="add" aria-label="Add player" onClick={() => setSheet({ kind: "add" })}>
             <Icon d={PLUS} />
           </button>
-          <button className="go" onClick={() => act({ type: "next" })}>
-            Next tune <Icon d={SKIP} />
+          <button className="btn solid" onClick={() => act({ type: "next" })}>
+            Next tune <Icon d={ARROW} />
           </button>
         </div>
       </nav>
 
       {sheet?.kind === "add" && (
         <AddSheet
+          inst={sheet.inst}
           close={close}
           add={(name, inst) => {
             act({ type: "add", id: crypto.randomUUID(), name, inst });
@@ -242,7 +293,7 @@ export default function Page() {
   );
 }
 
-const Row = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+const Line = ({ children }: { children: React.ReactNode }) => <>{children}</>;
 
 function SheetFrame({ close, children }: { close: () => void; children: React.ReactNode }) {
   return (
@@ -254,17 +305,17 @@ function SheetFrame({ close, children }: { close: () => void; children: React.Re
   );
 }
 
-function AddSheet({ add, close }: { add: (name: string, inst: Inst) => void; close: () => void }) {
+function AddSheet(props: { inst?: Inst; add: (name: string, inst: Inst) => void; close: () => void }) {
   const [name, setName] = useState("");
-  const [inst, setInst] = useState<Inst | null>(null);
+  const [inst, setInst] = useState<Inst | null>(props.inst ?? null);
   const ready = name.trim() && inst;
   return (
-    <SheetFrame close={close}>
+    <SheetFrame close={props.close}>
       <form
         style={{ display: "contents" }}
         onSubmit={(e) => {
           e.preventDefault();
-          if (ready) add(name.trim(), inst);
+          if (ready) props.add(name.trim(), inst);
         }}
       >
         <input
@@ -279,12 +330,12 @@ function AddSheet({ add, close }: { add: (name: string, inst: Inst) => void; clo
           enterKeyHint="done"
           onChange={(e) => setName(e.target.value)}
         />
-        <div className="chips">
+        <div className="picks">
           {INSTS.map((i) => (
             <button
               type="button"
               key={i.id}
-              className={`chip ${inst === i.id ? "sel" : ""}`}
+              className={`pick caps ${inst === i.id ? "sel" : ""}`}
               aria-pressed={inst === i.id}
               onClick={() => setInst(i.id)}
             >
@@ -292,8 +343,8 @@ function AddSheet({ add, close }: { add: (name: string, inst: Inst) => void; clo
             </button>
           ))}
         </div>
-        <button className="btn primary" disabled={!ready}>
-          Add
+        <button className="btn solid" disabled={!ready}>
+          Add <Icon d={PLUS} />
         </button>
       </form>
     </SheetFrame>
@@ -311,20 +362,20 @@ function PlayerSheet(props: {
   const label = INSTS.find((i) => i.id === p.inst)!.label;
   return (
     <SheetFrame close={props.close}>
-      <h2>
-        <small>{label}</small>
+      <h2 className="who">
+        <small className="caps">{label}</small>
         {p.name}
       </h2>
       {p.slot ? (
-        <button className="btn primary" disabled={!props.canSwap} onClick={() => act({ type: "swap", id: p.id })}>
+        <button className="btn solid" disabled={!props.canSwap} onClick={() => act({ type: "swap", id: p.id })}>
           Swap out
         </button>
       ) : (
-        <button className="btn primary" disabled={props.isFirst} onClick={() => act({ type: "bump", id: p.id })}>
+        <button className="btn solid" disabled={props.isFirst} onClick={() => act({ type: "bump", id: p.id })}>
           Move to front
         </button>
       )}
-      <button className="btn ghost" onClick={() => act({ type: "remove", id: p.id })}>
+      <button className="btn" onClick={() => act({ type: "remove", id: p.id })}>
         Remove
       </button>
     </SheetFrame>
@@ -336,24 +387,24 @@ function MenuSheet(props: { limit: number; setLimit: (n: number) => void; reset:
   const { limit, setLimit } = props;
   return (
     <SheetFrame close={props.close}>
-      <div className="stepper">
+      <div className="stepper caps">
         Tunes each
         <div>
-          <button className="icon" aria-label="Fewer" disabled={limit <= 1} onClick={() => setLimit(limit - 1)}>
+          <button aria-label="Fewer" disabled={limit <= 1} onClick={() => setLimit(limit - 1)}>
             <Icon d={MINUS} />
           </button>
           <b>{limit}</b>
-          <button className="icon" aria-label="More" disabled={limit >= 5} onClick={() => setLimit(limit + 1)}>
+          <button aria-label="More" disabled={limit >= 5} onClick={() => setLimit(limit + 1)}>
             <Icon d={PLUS} />
           </button>
         </div>
       </div>
       {sure ? (
-        <button className="btn confirm" onClick={props.reset}>
+        <button className="btn sure" onClick={props.reset}>
           Clear everyone?
         </button>
       ) : (
-        <button className="btn ghost" onClick={() => setSure(true)}>
+        <button className="btn" onClick={() => setSure(true)}>
           New jam
         </button>
       )}

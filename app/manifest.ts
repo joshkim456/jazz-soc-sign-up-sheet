@@ -6,8 +6,8 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: "Jam",
     start_url: "/",
     display: "standalone",
-    background_color: "#14110f",
-    theme_color: "#14110f",
+    background_color: "#f3efe4",
+    theme_color: "#f3efe4",
     icons: [{ src: "/icon.svg", sizes: "any", type: "image/svg+xml" }],
   };
 }
